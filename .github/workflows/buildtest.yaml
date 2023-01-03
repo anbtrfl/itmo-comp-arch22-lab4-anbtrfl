@@ -1,0 +1,351 @@
+name: CI/CD
+
+on:
+  pull_request:
+    branches: [ feedback ]
+    types: [ opened, reopened ]
+  
+env:
+  COMPILER: "clang++"
+  C_ARGS: "-std=c++20 -D _CRT_SECURE_NO_WARNINGS -D _USE_MATH_DEFINES -O2 -fopenmp"
+  C_FILES: "-I .. $((Get-ChildItem -Path .. -Include @('*.c', '*.cpp') -Recurse -ErrorAction SilentlyContinue -Force).FullName)"
+  INPUT_IMAGE: "test_data/in"
+  OUTPUT_IMAGE: "test_data/out"
+  BUILDLOG: "build.log"
+  OUTLOG: "result.log"
+
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  buildtest:
+    if: (github.actor == 'RonoveRaum') || (github.run_number < 16)   
+    strategy:
+      fail-fast: false
+      matrix:
+        os:  [ubuntu-22.04, windows-latest] 
+    
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 7
+
+    env:
+      EXE_EXT: If ('${{ matrix.os }}' -eq 'windows-latest') {".exe"} Else {" "}
+      EXE: omp4$(If ('${{ matrix.os }}' -eq 'windows-latest') {".exe"} Else {" "})
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: install_deps
+        id: install_deps
+        run: | 
+          $lvl = If (((Get-ChildItem -Path .. -Include @('hard.c', 'hard.cpp') -Recurse -ErrorAction SilentlyContinue -Force).FullName).Length -ne 0) {"hard"} 
+                  Else {If (((Get-ChildItem -Path .. -Include @('easy.c', 'easy.cpp') -Recurse -ErrorAction SilentlyContinue -Force).FullName).Length -ne 0) {"easy"} 
+                    Else {"invalid"} }
+          echo "lvl=$lvl" >> $env:GITHUB_OUTPUT
+          if ('${{ matrix.os }}' -eq 'windows-latest')
+          {
+            magick -help            
+          }
+          else
+          {
+            identify -help
+            sudo apt-get install libomp-dev            
+          }
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          
+          $lvl_ext0 = If ('${{steps.install_deps.outputs.lvl}}' -eq 'hard') {'.pgm'} else {''}
+          $lvl_ext1 = If ('${{steps.install_deps.outputs.lvl}}' -eq 'hard') {'.png'} else {''} 
+          echo "lvl_ext0=$lvl_ext0" >> $env:GITHUB_ENV
+          echo "lvl_ext1=$lvl_ext1" >> $env:GITHUB_ENV
+          
+      - name: update_readme_1
+        id: update_readme_1
+        if: (matrix.os == 'windows-latest' && steps.install_deps.outputs.lvl == 'invalid')
+        uses: theboi/github-update-readme@v1.3.0  
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}    
+        with: 
+          customReadmeFile: |
+            # Test log [windows]
+           
+            ## More info and test log [ubuntu] in Github.Actions: [![statusbadge](../../actions/workflows/buildtest.yaml/badge.svg?branch=main&event=pull_request)](../../actions/workflows/buildtest.yaml)
+                    
+            ### Precompile failed (build log):
+            ```
+            can't find easy.c(pp) or hard.c(pp)
+            ```
+          
+      - name: build
+        id: build
+        run: |
+          if ('${{steps.install_deps.outputs.lvl}}' -eq 'invalid') 
+          {            
+            echo "**Prebuild log**: can't find easy.c(pp) or hard.c(pp)" >> $env:GITHUB_STEP_SUMMARY
+            exit(1)
+          }
+          [void](mkdir __build)
+          cd __build 
+          try {
+            $ErrorActionPreference = 'SilentlyContinue'
+            pwsh -Command { ${{env.COMPILER}} ${{env.C_ARGS}} ${{env.C_FILES}} -o ${{env.EXE}} *>&1 > ${{env.BUILDLOG}} } 
+
+          } catch {
+            Write-Output "build failed!"
+
+          } finally {
+            $exit_code = $LastExitCode
+            echo "build_exit_code=$exit_code" >> $env:GITHUB_OUTPUT
+            $blog=""
+            if (Test-Path ${{env.BUILDLOG}} -PathType Leaf) { $blog="$(Get-Content ${{env.BUILDLOG}} -Raw)" }
+            
+            echo "blog<<EOF" >> $env:GITHUB_OUTPUT
+            echo "$blog" >> $env:GITHUB_OUTPUT
+            echo "EOF" >> $env:GITHUB_OUTPUT
+            
+            echo "**Build step (can be empty)**: $blog" >> $env:GITHUB_STEP_SUMMARY
+
+            "::group::Build log"
+            echo $blog
+            echo "::endgroup::"  
+          }
+          exit(0)
+            
+      - name: update_readme_build
+        id: update_readme_build
+        if: (matrix.os == 'windows-latest')
+        uses: theboi/github-update-readme@v1.3.0  
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}    
+        with: 
+          customReadmeFile: |
+            # Test log [windows]
+           
+            ## More info and test log [ubuntu] in Github.Actions: [![statusbadge](../../actions/workflows/buildtest.yaml/badge.svg?branch=main&event=pull_request)](../../actions/workflows/buildtest.yaml)
+                    
+            ### Compile failed (build log):
+            ```
+            ${{ steps.build.outputs.blog }}
+            ```
+             
+      - name: tests
+        id: tests
+        run: |  
+          if ('${{ matrix.os }}' -eq 'windows-latest') 
+          { 
+            echo "# Fetch all"
+            git fetch --all
+            git checkout main
+            git pull
+          }
+          $lvl_ext = If ('${{steps.install_deps.outputs.lvl}}' -eq 'hard') {'.pgm'} else {''}
+          cd __build
+          $z = ${{ env.EXE_EXT }}
+          $exe = "./omp4$($z)"
+
+          $params = -1..0
+          $test_input = "../${{env.INPUT_IMAGE}}$lvl_ext"
+          
+          foreach ($i in $params)
+          {
+            "::group::Output log test_$($i)"
+
+            $test_output = "../${{env.OUTPUT_IMAGE}}$i$lvl_ext"
+            $test_png = "$test_output.png"
+            if (Test-Path $test_output) { git rm $test_output }
+            if (Test-Path $test_png) { git rm $test_png }
+
+            & ./$exe $i $test_input $test_output 2>stderr.log 1>stdout.log
+            $exit_code_p = $LastExitCode           
+            
+            $test_exit_code = 0
+            $tlog=""
+            $stderr = if ((& Test-Path -Path stderr.log -PathType Leaf)) { $(Get-Content stderr.log -Raw) } else {'<empty>'}
+            $stdout = if ((& Test-Path -Path stdout.log -PathType Leaf)) { $(Get-Content stdout.log -Raw) } else {'<empty>'}
+            if ($exit_code_p -ne 0)
+            {              
+              $tlog="[ERROR] Program completed with code $exit_code_p.
+              [STDERR]: $stderr [STDOUT]: $stdout"
+              $test_exit_code += 10
+            }          
+            elseif ((& Test-Path -Path stderr.log -PathType Leaf) -and ((Get-ChildItem -Path stderr.log).Length -ne 0))
+            {
+              $tlog="[ERROR] Stderr is not empty [program completed with code $exit_code_p]
+              [STDERR]: $stderr"
+              $test_exit_code += 10000
+            } 
+            elseif (-not (& Test-Path -Path $test_output -PathType Leaf))
+            {
+              $tlog="[ERROR] Output file does not exist [program completed with code $exit_code_p]"
+              $test_exit_code += 100
+            }
+            elseif ((Get-ChildItem -Path $test_output).Length -eq 0) 
+            {
+              $tlog="[ERROR] Output file is empty [program completed with code $exit_code_p]"
+              $test_exit_code += 1000
+            }
+            elseif ((-not (& Test-Path -Path stdout.log -PathType Leaf)) -or ((Get-ChildItem -Path stdout.log).Length -eq 0))
+            {
+              $tlog="[ERROR] Stdout is empty [program completed with code $exit_code_p]
+              [STDERR]: $stderr"
+              $test_exit_code += 10000
+            }
+            else
+            {
+              $tlog="OK [program completed with code $exit_code_p]
+              [STDERR]: $stderr 
+              [STDOUT]: $stdout" 
+              if (Test-Path $test_output) { git add $test_output }
+            }
+                        
+            $delimiter = 'EOF'
+            echo "tlog$i<<$delimiter" >> $env:GITHUB_OUTPUT
+            echo "$tlog" >> $env:GITHUB_OUTPUT
+            echo "$delimiter" >> $env:GITHUB_OUTPUT
+            
+            echo "**Test $i log**: 
+            ```
+            $tlog
+            ```
+            " >> $env:GITHUB_STEP_SUMMARY
+            
+            echo "test_exit_code=$test_exit_code" >> $env:GITHUB_OUTPUT           
+
+            if (($test_exit_code -eq 0) -and ('${{ matrix.os }}' -eq 'windows-latest'))
+            {
+              if ('${{steps.install_deps.outputs.lvl}}' -eq 'hard')
+              {
+                $test_png = "$test_output.png"
+                magick convert $test_output $test_png
+                git add $test_png  
+              }
+              else
+              {
+                $il = $(Get-Content $test_input -Raw)
+                echo "inlog<<EOF" >> $env:GITHUB_OUTPUT
+                echo "$il" >> $env:GITHUB_OUTPUT
+                echo "EOF" >> $env:GITHUB_OUTPUT
+                
+                echo "**Test $i input**: 
+                ```
+                $il
+                ```
+                " >> $env:GITHUB_STEP_SUMMARY
+                                
+                $rl = if (Test-Path $test_output) { $(Get-Content $test_output -Raw) } else { '<empty>' }
+                echo "reslog$i<<EOF" >> $env:GITHUB_OUTPUT
+                echo "$rl" >> $env:GITHUB_OUTPUT
+                echo "EOF" >> $env:GITHUB_OUTPUT
+                                
+                echo "**Test $i result**: 
+                ```
+                $rl
+                ```
+                " >> $env:GITHUB_STEP_SUMMARY
+                
+              }
+            }
+            
+          }
+          exit(0)
+          
+      - name: push_results
+        if: (matrix.os == 'windows-latest')
+        run: |
+          Get-ChildItem -Recurse -Path ..
+          git commit -m "Automatically upload workflow results"
+          git push --force origin HEAD:main
+      
+      - name: update_readme_hard
+        id: update_readme_hard
+        if: (steps.install_deps.outputs.lvl == 'hard' && matrix.os == 'windows-latest')
+        uses: theboi/github-update-readme@v1.3.0  
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}    
+        with: 
+          customReadmeFile: |
+            # Test log [windows]
+           
+            ## More info and test log [ubuntu] in Github.Actions: [![statusbadge](../../actions/workflows/buildtest.yaml/badge.svg?branch=main&event=pull_request)](../../actions/workflows/buildtest.yaml)
+
+            Build log (can be empty):
+            ```
+            ${{ steps.build.outputs.blog }}
+            ```
+
+            Stdout+stderr (./omp4 0 in.pgm out0.pgm):
+            ```
+            ${{ steps.tests.outputs.tlog0 }}
+            ```
+                 
+            Stdout+stderr (./omp4 -1 in.pgm out-1.pgm):
+            ```
+            ${{ steps.tests.outputs.tlog-1 }}
+            ```
+
+            Input image:
+            
+            ![Input image](${{env.INPUT_IMAGE}}.png?sanitize=true&raw=true)
+            
+            Output image 0:
+            
+            ![Output image 0](${{env.OUTPUT_IMAGE}}0.pgm.png?sanitize=true&raw=true)
+
+            Output image -1:
+            
+            ![Output image -1](${{env.OUTPUT_IMAGE}}-1.pgm.png?sanitize=true&raw=true)
+
+            
+      - name: update_readme_easy
+        id: update_readme_easy
+        if: (steps.install_deps.outputs.lvl == 'easy' && matrix.os == 'windows-latest')
+        uses: theboi/github-update-readme@v1.3.0  
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}    
+        with: 
+          customReadmeFile: |
+            # Test log [windows]
+           
+            ## More info and test log [ubuntu] in Github.Actions: [![statusbadge](../../actions/workflows/buildtest.yaml/badge.svg?branch=main&event=pull_request)](../../actions/workflows/buildtest.yaml)
+
+            Build log (can be empty):
+            ```
+            ${{ steps.build.outputs.blog }}
+            ```
+
+            Stdout+stderr (./omp4 0 in out):
+            ```
+            ${{ steps.tests.outputs.tlog0 }}
+            ```
+                 
+            Stdout+stderr (./omp4 -1 in out):
+            ```
+            ${{ steps.tests.outputs.tlog-1 }}
+            ```
+            
+            Input:
+            ```
+            ${{ steps.tests.outputs.inlog }}
+            ```
+            
+            Output 0:
+            ```
+            ${{ steps.tests.outputs.reslog0 }}
+            ```
+
+            Output -1:
+            ```
+            ${{ steps.tests.outputs.reslog-1 }}
+            ```
+
+      - name: post_test
+        id: post_test
+        run: |
+          if (${{ steps.tests.outputs.test_exit_code }} -ne 0)
+          {
+            echo "Problems with tests"
+            exit(1)
+          }
+          
