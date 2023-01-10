@@ -46,7 +46,7 @@ int main(int argc, char* argv[]) {
 #pragma omp parallel
     {
         srand(int(time(NULL)) ^ omp_get_thread_num());
-#pragma omp for schedule(static, 4)
+#pragma omp for schedule(static)
         for (int i = 1; i < cnt; i++) {
             double x = ((double)rand() / 32767) * 2 - 1;
             double y = ((double)rand() / 32767) * 2 - 1;
