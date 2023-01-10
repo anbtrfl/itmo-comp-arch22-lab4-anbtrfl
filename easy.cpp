@@ -1,4 +1,4 @@
-//#define _CRT_SECURE_NO_WARNINGS
+#define _CRT_SECURE_NO_WARNINGS
 #include <iostream>
 #include <omp.h>
 
@@ -29,7 +29,7 @@ int main(int argc, char* argv[]) {
         printf("Can`t open input file");
         exit(-1);
     }
-    if (fscanf_s(inp, "%f%d", &R, &cnt) != 2) {
+    if (fscanf(inp, "%f%d", &R, &cnt) != 2) {
         printf("Error reading input file");
         exit(-1);
     }
