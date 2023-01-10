@@ -10,10 +10,6 @@ D:\a\itmo-comp-arch22-lab4-anbtrfl\itmo-comp-arch22-lab4-anbtrfl\easy.cpp:1:9: w
 <command line>:1:9: note: previous definition is here
 #define _CRT_SECURE_NO_WARNINGS 1
         ^
-D:\a\itmo-comp-arch22-lab4-anbtrfl\itmo-comp-arch22-lab4-anbtrfl\easy.cpp:10:1: error: 'main' must return 'int'
-void main(int argc, char* argv[]) {
-^~~~
-int
-1 warning and 1 error generated.
+1 warning generated.
 
 ```
